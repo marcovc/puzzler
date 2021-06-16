@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator typegraphql {
+  provider = "typegraphql-prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Puzzle {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique @db.VarChar(255)
+  description Json
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  authorId    String           @db.Char(42)
+  author      User             @relation(fields: [authorId], references: [id])
+  instances   PuzzleInstance[]
+}
+
+model PuzzleInstance {
+  id         String   @id @db.Char(64)
+  parameters Json     @unique
+  createdAt  DateTime @default(now())
+  puzzleId   Int?
+  authorId   String?  @db.Char(42)
+  puzzle     Puzzle?  @relation(fields: [puzzleId], references: [id])
+  User       User?    @relation(fields: [authorId], references: [id])
+}
+
+model User {
+  id              String           @id @db.Char(42)
+  name            String?
+  email           String?
+  puzzles         Puzzle[]
+  puzzleInstances PuzzleInstance[]
+}

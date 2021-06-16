@@ -1,0 +1,247 @@
+import {strict as assert, throws} from 'assert';
+
+const IntSetType = {
+  LIST: 0,
+  RANGE: 1
+};
+
+const ProblemType = {
+  SATISFY: 0,
+  MINIMIZE: 1,
+  MAXIMIZE: 2
+};
+
+const VarType = {
+  BOOL: 0,
+  INT: 1,
+  INTSET: 2
+};
+
+const ConstraintFunctor = {
+  INT_INDOMAIN: 0,
+};
+
+class IdIdxMap {
+  constructor() {
+    this.ids = [];
+    this.idxs = {}; 
+  }
+  size() {
+    return this.ids.length;
+  }
+  getIdx(id) {
+    return this.idxs[id];
+  }
+  getId(idx) {
+    return this.ids[idx];
+  }
+  addIfNotExists(id) {
+    if (id in this.idxs)
+      return this.idxs[id];
+    else {
+      const idx = this.ids.length;
+      this.ids.push(id);
+      this.idxs[id] = idx;
+      return idx;
+    }
+  }
+};
+
+class Encoding {
+  constructor() {
+    this.intVarMap = new IdIdxMap();
+    this.boolVarMap = new IdIdxMap();
+    this.intSetVarMap = new IdIdxMap();
+    this.boolMap = new IdIdxMap();
+    this.intMap =  new IdIdxMap();
+    this.intListMap = new IdIdxMap();
+    this.intRangeMap = new IdIdxMap();
+    this.intSetMap = new IdIdxMap();
+    this.arrayMap = new IdIdxMap();
+    this.constraints = [];
+  }
+  addIntVar(ref) {
+    return this.intVarMap.addIfNotExists(ref.identifier);
+  }
+  addBoolVar(ref) {
+    return this.boolVarMap.addIfNotExists(ref.identifier);
+  }
+  addIntSetVar(ref) {
+    return this.intSetVarMap.addIfNotExists(ref.identifier);
+  }
+  addInt(v) {
+    return this.intMap.addIfNotExists(v);
+  }
+  addBool(v) {
+    return this.boolMap.addIfNotExists(v);
+  }
+  addIntList(v) {
+    return this.intListMap.addIfNotExists(v);
+  }
+  addIntRange(v) {
+    return this.intRangeMap.addIfNotExists(v);
+  }
+  addIntSet(v) {
+    return this.intSetMap.addIfNotExists(v);
+  }
+  addArray(v) {
+    return this.arrayMap.addIfNotExists(v);
+  }
+  addConstraint(c) {
+    this.constraints.push(c);
+  }
+  setOptimizeGoal(sense, variableType, variable) {
+    this.problemType = sense;
+    this.optimizeVarType = variableType;
+    this.optimizeVar = variable;
+  }
+  instance() {
+    return {
+      nrBoolVars: this.boolVarMap.size(),
+      nrIntVars: this.intVarMap.size(),
+      nrIntSetVars: this.intSetVarMap.size(),
+      bools: this.boolMap.ids,
+      ints: this.intMap.ids,
+      intLists: this.intListMap.ids,
+      intRanges: this.intRangeMap.ids,
+      intSets: this.intSetMap.ids,
+      arrays: this.arrayMap.ids,
+      constraints: this.constraints,
+      problemType: this.problemType,
+      optimizeVarType: this.optimizeVarType,
+      optimizeVar: this.optimizeVar,
+    }
+  }
+};
+
+export function encode(instance) {
+  const { par_decl_items, var_decl_items, constraint_items, solve_item } = instance;
+
+  // Collect all pars/vars.
+  const vars = Object.fromEntries([
+    ...par_decl_items.map(
+      i => [i.identifier, i]
+    ),
+    ...var_decl_items.map(
+      i => [i.identifier, i]
+    )
+  ]);
+
+  // Add constraints for enforcing domain relations.
+  var_decl_items.filter(
+      i => i.meta === "VAR" && i.domain.list_type !== "FULL"
+    ).map(
+      i => ({
+        identifier: `${i.type.toLowerCase()}_indomain`,
+        args: [
+          {
+            meta: "REF",
+            value: i.identifier,
+          },
+          {
+            meta: "INTSET_LIT",
+            value: i.domain
+          }
+        ]
+      })
+    ).forEach(c => constraint_items.push(c));
+
+
+  // ======= constraint_items =======
+
+  //constraint_items
+/*
+  Constraint {
+    type: "less_eq"
+    args: [BasicExpr]
+  }
+  BasicExpr {
+    type: BoolLitID | SetLitID | IntLitID
+    ref: int
+  }
+*/
+
+  const encoding = new Encoding()
+
+  function encodeBasicRef(expr) {
+    const ref = vars[expr.value];
+    if (ref.meta === "PAR")
+      return encodeBasicExpr(ref.expr);
+    assert.equal(ref.meta, "VAR");
+    if (ref.expr)
+      return encodeBasicExpr(ref.expr);
+    if (ref.type === "INT")
+      return encoding.addIntVar(ref); //["INT_VAR", encoding.addIntVar(ref)];
+    if (ref.type === "BOOL")
+      return encoding.addBoolVar(ref); //["BOOL_VAR", encoding.addBoolVar(ref)];
+    if (ref.type === "INTSET")
+      return encoding.addIntSetVar(ref); //["INTSET_VAR", encoding.addIntSetVar(ref)];
+    throw "Unreachable";
+  }
+
+  function encodeBasicExpr(expr) {
+    if (expr.meta === "BOOL_LIT")
+      return encoding.addBool(expr.value) // ["BOOL_LIT", encoding.addBool(expr.value)];
+    if (expr.meta === "INT_LIT")
+      return encoding.addInt(expr.value) // ["INT_LIT", encoding.addInt(expr.value)];
+    if (expr.meta === "INTSET_LIT" && expr.value.list_type === "VALUES")
+      return encoding.addIntSet([IntSetType.LIST, encoding.addIntList(expr.value.values)]);
+    if (expr.meta === "INTSET_LIT" && expr.value.list_type === "RANGE")
+      return encoding.addIntSet([IntSetType.RANGE, encoding.addIntRange([expr.value.lb, expr.value.ub])]);
+    if (expr.meta === "REF")
+      return encodeBasicRef(expr);
+  }
+
+  function encodeParExpr(expr) {
+    if (expr.meta === "PAR_ARRAY_LIT")
+      return expr.values.map(encodeBasicExpr); //encoding.addIntLRListLit(expr.values.map(encodeBasicExpr));
+    return encodeBasicExpr(expr);
+  }
+
+  function encodeRef(expr) {
+    const ref = vars[expr.value];
+    if (ref.meta === "PAR_ARRAY")
+      return encodeParExpr(ref.expr);
+    if (ref.meta === "VAR_ARRAY")
+      return ref.expr.values.map(encodeBasicExpr);
+  }
+
+  function encodeExpr(expr) {
+    if (expr.meta === "ARRAY_LIT")
+      return expr.values.map(encodeBasicExpr);
+    else
+    if (expr.meta === "REF" && vars[expr.value].size !== undefined)
+      return encodeRef(expr);
+    else
+      return [encodeBasicExpr(expr)];
+  }
+
+  function encodeConstraint(c) {
+    return [ConstraintFunctor[c.identifier.toUpperCase()], c.args.map(encodeExpr)]
+  }
+
+  constraint_items.map(encodeConstraint).forEach(c => encoding.addConstraint(c));
+
+  /*
+  // collect decisions vars
+  function isFunctionallyDependent(v) {
+    return v.annotations.some(a => a.identifier === "is_defined_var");
+  }
+  const decisionVars = var_decl_items.filter(v => v.meta === "VAR" && !isFunctionallyDependent(v));
+
+
+  decisionVars.map(v => {
+    if (v.expr !== undefined)
+  })*/
+
+  // goal
+
+  if (solve_item.expr !== undefined) {
+    const varType = VarType[vars[solve_item.expr.value].type];
+    encoding.setOptimizeGoal(ProblemType[solve_item.type], varType, encodeBasicExpr(solve_item.expr));
+  }
+  else {
+    encoding.setOptimizeGoal(ProblemType[solve_item.type], 0, 0);
+  }
+  return encoding
+}
